@@ -131,7 +131,7 @@ def write_job_script(content: str, job_name: str, *, jobs_dir: str | Path) -> Pa
             os.fsync(temporary_file.fileno())
         os.chmod(temporary_path, 0o755)
         os.replace(temporary_path, destination)
-    except Exception:
+    except BaseException:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
         raise

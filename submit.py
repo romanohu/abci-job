@@ -30,6 +30,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     try:
         separator_index = arguments.index("--")
     except ValueError:
+        parser.parse_args(arguments)
         parser.error("a workload command must follow --")
 
     command = arguments[separator_index + 1 :]

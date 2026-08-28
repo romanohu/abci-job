@@ -1,5 +1,9 @@
+import os
+import shlex
+import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -112,8 +116,109 @@ def test_render_job_script_renders_monitor_loop_and_cleanup_trap():
     assert "date" in script
     assert "sleep 600" in script
     assert "monitor_pid=$!" in script
-    assert 'kill "$monitor_pid" 2>/dev/null || true' in script
-    assert "trap cleanup EXIT INT TERM" in script
+
+
+@pytest.mark.parametrize(
+    ("signal_number", "expected_status"),
+    [(signal.SIGINT, 130), (signal.SIGTERM, 143)],
+)
+def test_rendered_monitor_cleans_child_process_and_exits_on_signal(
+    tmp_path: Path, signal_number: signal.Signals, expected_status: int
+):
+    monitor_child_path = tmp_path / "monitor-child.pid"
+    monitor_cleanup_path = tmp_path / "monitor-cleaned"
+    monitor_command_path = tmp_path / "monitor.sh"
+    monitor_command_path.write_text(
+        "#!/bin/bash\n"
+        'echo "$$" > "$1"\n'
+        "trap 'sleep 0.2; touch \"$2\"; exit 0' TERM INT\n"
+        "while true; do sleep 1; done\n",
+        encoding="utf-8",
+    )
+    monitor_command = " ".join(
+        shlex.quote(argument)
+        for argument in (
+            "bash",
+            str(monitor_command_path),
+            str(monitor_child_path),
+            str(monitor_cleanup_path),
+        )
+    )
+    script = render_job_script(
+        valid_config(
+            workdir=tmp_path,
+            setup_commands=("workload_wait() { while true; do wait || true; done; }",),
+            monitor=MonitorConfig(
+                enabled=True,
+                interval_seconds=60,
+                commands=(monitor_command,),
+            ),
+        ),
+        "signal-test",
+        ["workload_wait"],
+    )
+    script_path = write_job_script(script, "signal-test", jobs_dir=tmp_path)
+    process = subprocess.Popen(
+        ["bash", str(script_path)],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    monitor_child_pid: int | None = None
+    monitor_process_group: int | None = None
+
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not monitor_child_path.exists():
+            time.sleep(0.01)
+        assert monitor_child_path.exists(), "monitor child did not start"
+        monitor_child_pid = int(monitor_child_path.read_text(encoding="utf-8"))
+        monitor_process_group = os.getpgid(monitor_child_pid)
+        assert monitor_process_group != os.getpgid(process.pid)
+
+        process.send_signal(signal_number)
+        assert process.wait(timeout=5) == expected_status
+        assert monitor_cleanup_path.exists()
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and _process_exists(monitor_child_pid):
+            time.sleep(0.01)
+        assert not _process_exists(monitor_child_pid)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if monitor_process_group is not None:
+            try:
+                os.killpg(monitor_process_group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_render_job_script_quotes_metacharacters_quotes_and_empty_tokens():
+    script = render_job_script(
+        valid_config(),
+        "example-job",
+        ["printf", "%s", "$HOME; * | &", "it's", ""],
+    )
+
+    assert "printf %s '$HOME; * | &' 'it'\"'\"'s' ''" in script
+
+
+def test_render_job_script_rejects_non_string_command_tokens():
+    with pytest.raises(ConfigurationError, match="strings"):
+        render_job_script(
+            valid_config(),
+            "example-job",
+            ["printf", 1],  # type: ignore[list-item]
+        )
+
+
+@pytest.mark.parametrize("unsafe_token", ["line\nfeed", "carriage\rreturn"])
+def test_render_job_script_rejects_cr_or_lf_in_command_tokens(unsafe_token: str):
+    with pytest.raises(ConfigurationError, match="newline"):
+        render_job_script(valid_config(), "example-job", ["printf", unsafe_token])
 
 
 def test_render_job_script_rejects_empty_command():
@@ -182,6 +287,25 @@ def test_write_job_script_failure_preserves_existing_file_and_cleans_tempfile(
         )
 
     with pytest.raises(OSError, match=f"{failure_point} failed"):
+        write_job_script("new", "example", jobs_dir=destination.parent)
+
+    assert destination.read_text(encoding="utf-8") == "old"
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+def test_write_job_script_keyboard_interrupt_cleans_tempfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    destination = tmp_path / "jobs" / "example.sh"
+    destination.parent.mkdir()
+    destination.write_text("old", encoding="utf-8")
+
+    def interrupt_replace(*args: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("abci_job.submitter.os.replace", interrupt_replace)
+
+    with pytest.raises(KeyboardInterrupt):
         write_job_script("new", "example", jobs_dir=destination.parent)
 
     assert destination.read_text(encoding="utf-8") == "old"
@@ -486,3 +610,11 @@ def test_load_config_wraps_read_errors_with_the_config_path(tmp_path: Path, path
 
     with pytest.raises(ConfigurationError, match=path):
         load_config(config_path)
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True

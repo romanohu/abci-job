@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "abci-job"
 version = "0.1.0"
@@ -11,6 +15,9 @@ dev = [
     "pytest>=8,<9",
     "ruff>=0.11",
 ]
+
+[tool.setuptools]
+packages = ["abci_job"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -13,7 +13,9 @@ cd {{ workdir }}
 {{ setup_command }}
 {% endfor %}
 {% if monitor_enabled %}
+set -m
 (
+  trap 'exit 0' INT TERM
   while true; do
 {% for monitor_command in monitor_commands %}
     {{ monitor_command }}
@@ -22,9 +24,19 @@ cd {{ workdir }}
   done
 ) &
 monitor_pid=$!
-cleanup() {
-  kill "$monitor_pid" 2>/dev/null || true
+set +m
+cleanup_monitor() {
+  kill -TERM -- "-$monitor_pid" 2>/dev/null || true
+  wait "$monitor_pid" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+exit_on_signal() {
+  local exit_status=$1
+  trap - EXIT INT TERM
+  cleanup_monitor
+  exit "$exit_status"
+}
+trap cleanup_monitor EXIT
+trap 'exit_on_signal 130' INT
+trap 'exit_on_signal 143' TERM
 {% endif %}
 {{ command }}

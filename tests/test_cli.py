@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,19 @@ def test_parse_args_supports_print_script():
     assert args.print_script is True
 
 
+def test_cli_help_exits_successfully_without_workload_boundary():
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parents[1] / "submit.py"), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "usage:" in result.stdout
+    assert result.stderr == ""
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -82,6 +96,7 @@ def test_parse_args_keeps_helper_options_after_separator_as_workload_arguments()
             "example-job",
             "--",
             "python",
+            "--help",
             "--dry-run",
             "--print-script",
         ]
@@ -89,7 +104,7 @@ def test_parse_args_keeps_helper_options_after_separator_as_workload_arguments()
 
     assert args.dry_run is False
     assert args.print_script is False
-    assert args.command == ["python", "--dry-run", "--print-script"]
+    assert args.command == ["python", "--help", "--dry-run", "--print-script"]
 
 
 def test_main_dry_run_writes_executable_script_without_submitting(
