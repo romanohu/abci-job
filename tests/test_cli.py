@@ -209,6 +209,7 @@ def test_main_reports_invalid_configuration_without_traceback(
     assert result == 2
     assert captured.out == ""
     assert captured.err.startswith("error: configuration")
+    assert captured.err.count("\n") == 1
     assert "Traceback" not in captured.err
 
 
