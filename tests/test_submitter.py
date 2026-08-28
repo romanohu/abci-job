@@ -16,7 +16,7 @@ from abci_job.submitter import (
     write_job_script,
 )
 
-VALID_CONFIG_TOML = '''
+VALID_CONFIG_TOML = """
 group = "example-group"
 queue = "rt_HG"
 walltime = "12:00:00"
@@ -28,7 +28,7 @@ setup_commands = ["module purge", "source .venv/bin/activate"]
 enabled = true
 interval_seconds = 600
 commands = ["nvidia-smi"]
-'''.strip()
+""".strip()
 
 
 def write_config(tmp_path: Path, text: str = VALID_CONFIG_TOML) -> Path:
@@ -218,7 +218,10 @@ def test_submit_job_uses_expected_scheduler_invocation(tmp_path: Path):
 
     assert result == "12345.pbs1"
     assert calls == [
-        ((["qsub", str(job_path)],), {"check": True, "capture_output": True, "text": True})
+        (
+            (["qsub", str(job_path)],),
+            {"check": True, "capture_output": True, "text": True},
+        )
     ]
 
 
@@ -275,12 +278,12 @@ def test_load_config_applies_optional_defaults(tmp_path: Path):
     config = load_config(
         write_config(
             tmp_path,
-            '''
+            """
 group = "example-group"
 queue = "rt_HG"
 walltime = "12:00:00"
 workdir = "/groups/example-group/user/project"
-'''.strip(),
+""".strip(),
         )
     )
 
@@ -336,7 +339,9 @@ def test_validate_job_name_rejects_unsafe_names(name: str):
 
 @pytest.mark.parametrize("field", ["group", "queue", "walltime", "workdir"])
 def test_load_config_rejects_missing_required_fields(tmp_path: Path, field: str):
-    lines = [line for line in VALID_CONFIG_TOML.splitlines() if not line.startswith(field)]
+    lines = [
+        line for line in VALID_CONFIG_TOML.splitlines() if not line.startswith(field)
+    ]
 
     with pytest.raises(ConfigurationError, match=field):
         load_config(write_config(tmp_path, "\n".join(lines)))
@@ -383,14 +388,18 @@ def test_load_config_rejects_incorrectly_typed_scalars(
     }[field]
 
     with pytest.raises(ConfigurationError, match=message):
-        load_config(write_config(tmp_path, VALID_CONFIG_TOML.replace(original, replacement)))
+        load_config(
+            write_config(tmp_path, VALID_CONFIG_TOML.replace(original, replacement))
+        )
 
 
 @pytest.mark.parametrize("interval", [0, -1])
 def test_load_config_rejects_non_positive_monitor_interval(
     tmp_path: Path, interval: int
 ):
-    text = VALID_CONFIG_TOML.replace("interval_seconds = 600", f"interval_seconds = {interval}")
+    text = VALID_CONFIG_TOML.replace(
+        "interval_seconds = 600", f"interval_seconds = {interval}"
+    )
 
     with pytest.raises(ConfigurationError, match="monitor.interval_seconds"):
         load_config(write_config(tmp_path, text))
@@ -415,7 +424,9 @@ def test_load_config_rejects_invalid_command_collections(
     )
 
     with pytest.raises(ConfigurationError, match=message):
-        load_config(write_config(tmp_path, VALID_CONFIG_TOML.replace(original, replacement)))
+        load_config(
+            write_config(tmp_path, VALID_CONFIG_TOML.replace(original, replacement))
+        )
 
 
 def test_load_config_requires_command_when_monitoring_is_enabled(tmp_path: Path):
@@ -449,7 +460,9 @@ def test_load_config_rejects_carriage_returns(
     )
 
     with pytest.raises(ConfigurationError, match=message):
-        load_config(write_config(tmp_path, VALID_CONFIG_TOML.replace(original, replacement)))
+        load_config(
+            write_config(tmp_path, VALID_CONFIG_TOML.replace(original, replacement))
+        )
 
 
 def test_load_config_rejects_non_table_monitor(tmp_path: Path):

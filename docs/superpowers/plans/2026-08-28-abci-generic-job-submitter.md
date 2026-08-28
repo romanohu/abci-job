@@ -66,7 +66,7 @@ import pytest
 from abci_job.submitter import ConfigurationError, load_config, validate_job_name
 
 
-VALID_CONFIG_TOML = '''
+VALID_CONFIG_TOML = """
 group = "example-group"
 queue = "rt_HG"
 walltime = "12:00:00"
@@ -78,7 +78,7 @@ setup_commands = ["module purge", "source .venv/bin/activate"]
 enabled = true
 interval_seconds = 600
 commands = ["nvidia-smi"]
-'''.strip()
+""".strip()
 
 
 def write_config(tmp_path: Path, text: str = VALID_CONFIG_TOML) -> Path:
@@ -317,7 +317,9 @@ def test_write_job_script_atomically_replaces_file_and_sets_executable(tmp_path)
     destination.parent.mkdir()
     destination.write_text("old", encoding="utf-8")
 
-    result = write_job_script("#!/bin/bash\necho new\n", "example", jobs_dir=destination.parent)
+    result = write_job_script(
+        "#!/bin/bash\necho new\n", "example", jobs_dir=destination.parent
+    )
 
     assert result == destination
     assert destination.read_text(encoding="utf-8") == "#!/bin/bash\necho new\n"
@@ -402,11 +404,17 @@ Create `tests/test_cli.py` and specify parsing behavior:
 def test_parse_args_preserves_every_command_token_after_separator():
     args = parse_args(
         [
-            "--config", "configs/abci_default.toml",
-            "--name", "example-job",
+            "--config",
+            "configs/abci_default.toml",
+            "--name",
+            "example-job",
             "--dry-run",
             "--",
-            "python", "-m", "package.train", "--label", "run one",
+            "python",
+            "-m",
+            "package.train",
+            "--label",
+            "run one",
         ]
     )
 
