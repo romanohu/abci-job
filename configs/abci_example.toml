@@ -1,0 +1,15 @@
+group = "your-abci-group"
+queue = "rt_HG"
+walltime = "12:00:00"
+workdir = "/groups/your-abci-group/your-user/your-project"
+join_output = true
+
+setup_commands = [
+  "source /etc/profile.d/modules.sh",
+  "module load python/3.11",
+]
+
+[monitor]
+enabled = false
+interval_seconds = 600
+commands = ["nvidia-smi"]

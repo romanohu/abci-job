@@ -1,1 +1,12 @@
 .worktrees/
+/configs/abci_default.toml
+/jobs/*.sh
+!/jobs/.gitkeep
+*.o[0-9]*
+*.e[0-9]*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.DS_Store
