@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import os
 import re
+import shlex
+import subprocess
+import tempfile
 import tomllib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
 
 _JOB_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SCHEDULER_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _WALLTIME_PATTERN = re.compile(r"^\d{1,3}:[0-5]\d:[0-5]\d$")
+_JOB_ID_PATTERN = re.compile(r"^\d+(?:\.[A-Za-z0-9._-]+)?$")
 _REQUIRED_CONFIG_KEYS = {"group", "queue", "walltime", "workdir"}
 _OPTIONAL_CONFIG_KEYS = {"join_output", "setup_commands", "monitor"}
 _MONITOR_KEYS = {"enabled", "interval_seconds", "commands"}
@@ -77,6 +85,141 @@ def validate_job_name(name: str) -> str:
     if not isinstance(name, str) or not _JOB_NAME_PATTERN.fullmatch(name):
         raise ConfigurationError("job name is not scheduler-safe")
     return name
+
+
+def render_job_script(
+    config: ABCIConfig,
+    job_name: str,
+    command: Sequence[str],
+    *,
+    template_path: str | Path | None = None,
+) -> str:
+    group, queue, walltime, workdir, join_output, setup_commands, monitor = (
+        _validate_render_config(config)
+    )
+    template = _load_template(template_path)
+
+    return template.render(
+        group=group,
+        queue=queue,
+        walltime=walltime,
+        job_name=validate_job_name(job_name),
+        join_output=join_output,
+        workdir=shlex.quote(str(workdir)),
+        setup_commands=setup_commands,
+        monitor_enabled=monitor.enabled,
+        monitor_interval=monitor.interval_seconds,
+        monitor_commands=monitor.commands,
+        command=_quote_command(command),
+    )
+
+
+def write_job_script(content: str, job_name: str, *, jobs_dir: str | Path) -> Path:
+    validated_name = validate_job_name(job_name)
+    destination_dir = Path(jobs_dir)
+    destination = destination_dir / f"{validated_name}.sh"
+    temporary_path: Path | None = None
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=destination_dir, delete=False
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.chmod(temporary_path, 0o755)
+        os.replace(temporary_path, destination)
+    except Exception:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+
+    return destination
+
+
+def submit_job(
+    job_path: str | Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str:
+    try:
+        result = runner(
+            ["qsub", str(job_path)], check=True, capture_output=True, text=True
+        )
+    except FileNotFoundError as error:
+        raise SubmissionError("qsub executable was not found") from error
+    except subprocess.CalledProcessError as error:
+        stderr = error.stderr.strip() if isinstance(error.stderr, str) else ""
+        message = "scheduler rejected the job"
+        if stderr:
+            message = f"{message}: {stderr}"
+        raise SubmissionError(message) from error
+
+    job_id = result.stdout.strip()
+    if not _JOB_ID_PATTERN.fullmatch(job_id):
+        raise SubmissionError("scheduler returned an invalid job identifier")
+    return job_id
+
+
+def _validate_render_config(
+    config: ABCIConfig,
+) -> tuple[str, str, str, Path, bool, tuple[str, ...], MonitorConfig]:
+    if not isinstance(config, ABCIConfig):
+        raise ConfigurationError("config must be an ABCIConfig")
+    if not isinstance(config.monitor, MonitorConfig):
+        raise ConfigurationError("monitor must be a MonitorConfig")
+
+    group = _validate_scheduler_value({"group": config.group}, "group")
+    queue = _validate_scheduler_value({"queue": config.queue}, "queue")
+    walltime = _validate_walltime({"walltime": config.walltime})
+    workdir = _validate_workdir({"workdir": str(config.workdir)})
+    join_output = _validate_bool(config.join_output, "join_output")
+    setup_commands = _validate_render_commands(config.setup_commands, "setup_commands")
+    monitor_data: dict[str, object] = {
+        "enabled": config.monitor.enabled,
+        "commands": list(config.monitor.commands),
+    }
+    if config.monitor.interval_seconds != 0:
+        monitor_data["interval_seconds"] = config.monitor.interval_seconds
+    monitor = _validate_monitor(monitor_data)
+    return group, queue, walltime, workdir, join_output, setup_commands, monitor
+
+
+def _validate_render_commands(value: object, field: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        raise ConfigurationError(f"{field} must be a tuple")
+    return tuple(_validate_string(command, field) for command in value)
+
+
+def _load_template(template_path: str | Path | None):
+    path = (
+        Path(__file__).resolve().parents[1] / "templates" / "abci.pbs.j2"
+        if template_path is None
+        else Path(template_path)
+    )
+    environment = Environment(
+        loader=FileSystemLoader(path.parent),
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=True,
+    )
+    try:
+        return environment.get_template(path.name)
+    except TemplateNotFound as error:
+        raise ConfigurationError(f"template {path} was not found") from error
+
+
+def _quote_command(command: Sequence[str]) -> str:
+    if isinstance(command, (str, bytes)) or not command:
+        raise ConfigurationError("command must contain at least one argument")
+    if any(not isinstance(argument, str) for argument in command):
+        raise ConfigurationError("command arguments must be strings")
+    if any("\n" in argument or "\r" in argument for argument in command):
+        raise ConfigurationError("command arguments cannot contain a newline")
+    return " ".join(shlex.quote(argument) for argument in command)
 
 
 def _validate_top_level_keys(data: dict[str, object]) -> None:

@@ -1,0 +1,30 @@
+#!/bin/bash -l
+#PBS -q {{ queue }}
+#PBS -l select=1
+#PBS -l walltime={{ walltime }}
+#PBS -P {{ group }}
+#PBS -N {{ job_name }}
+{% if join_output %}#PBS -j oe
+{% endif %}
+set -euo pipefail
+
+cd {{ workdir }}
+{% for setup_command in setup_commands %}
+{{ setup_command }}
+{% endfor %}
+{% if monitor_enabled %}
+(
+  while true; do
+{% for monitor_command in monitor_commands %}
+    {{ monitor_command }}
+{% endfor %}
+    sleep {{ monitor_interval }}
+  done
+) &
+monitor_pid=$!
+cleanup() {
+  kill "$monitor_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+{% endif %}
+{{ command }}

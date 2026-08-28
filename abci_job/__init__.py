@@ -5,7 +5,10 @@ from .submitter import (
     MonitorConfig,
     SubmissionError,
     load_config,
+    render_job_script,
+    submit_job,
     validate_job_name,
+    write_job_script,
 )
 
 __all__ = [
@@ -15,5 +18,8 @@ __all__ = [
     "MonitorConfig",
     "SubmissionError",
     "load_config",
+    "render_job_script",
+    "submit_job",
     "validate_job_name",
+    "write_job_script",
 ]
