@@ -1,4 +1,5 @@
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -145,6 +146,48 @@ def test_write_job_script_atomically_replaces_file_and_sets_executable(tmp_path:
     assert list(destination.parent.iterdir()) == [destination]
 
 
+@pytest.mark.parametrize("failure_point", ["write", "chmod", "replace"])
+def test_write_job_script_failure_preserves_existing_file_and_cleans_tempfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+):
+    destination = tmp_path / "jobs" / "example.sh"
+    destination.parent.mkdir()
+    destination.write_text("old", encoding="utf-8")
+
+    if failure_point == "write":
+        original_named_temporary_file = tempfile.NamedTemporaryFile
+
+        def failing_named_temporary_file(*args: object, **kwargs: object):
+            temporary_file = original_named_temporary_file(*args, **kwargs)
+
+            def fail_write(content: str) -> int:
+                raise OSError("write failed")
+
+            temporary_file.write = fail_write
+            return temporary_file
+
+        monkeypatch.setattr(
+            "abci_job.submitter.tempfile.NamedTemporaryFile",
+            failing_named_temporary_file,
+        )
+    elif failure_point == "chmod":
+        monkeypatch.setattr(
+            "abci_job.submitter.os.chmod",
+            lambda *args: (_ for _ in ()).throw(OSError("chmod failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            "abci_job.submitter.os.replace",
+            lambda *args: (_ for _ in ()).throw(OSError("replace failed")),
+        )
+
+    with pytest.raises(OSError, match=f"{failure_point} failed"):
+        write_job_script("new", "example", jobs_dir=destination.parent)
+
+    assert destination.read_text(encoding="utf-8") == "old"
+    assert list(destination.parent.iterdir()) == [destination]
+
+
 def test_write_job_script_creates_jobs_directory(tmp_path: Path):
     jobs_dir = tmp_path / "jobs"
 
@@ -193,14 +236,14 @@ def test_submit_job_rejects_empty_or_malformed_scheduler_output(
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "message"),
     [
-        FileNotFoundError(),
-        subprocess.CalledProcessError(1, ["qsub"], stderr="denied"),
+        (FileNotFoundError(), "qsub executable"),
+        (subprocess.CalledProcessError(1, ["qsub"], stderr="denied"), "denied"),
     ],
 )
 def test_submit_job_wraps_scheduler_errors_and_keeps_script(
-    tmp_path: Path, error: Exception
+    tmp_path: Path, error: Exception, message: str
 ):
     job_path = tmp_path / "example.sh"
     job_path.write_text("#!/bin/bash\n", encoding="utf-8")
@@ -208,7 +251,7 @@ def test_submit_job_wraps_scheduler_errors_and_keeps_script(
     def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         raise error
 
-    with pytest.raises(SubmissionError):
+    with pytest.raises(SubmissionError, match=message):
         submit_job(job_path, runner=runner)
 
     assert job_path.exists()
