@@ -54,6 +54,9 @@ python submit.py \
 The script is written to `jobs/<name>.sh`. Add `--print-script` to print it as
 well. You can inspect and submit a generated script yourself when needed:
 
+Before a manual submission, create the parent directory shown by the rendered
+`#PBS -o` path. The normal non-dry-run helper does this automatically.
+
 ```bash
 sed -n '1,240p' jobs/example-job.sh
 qsub jobs/example-job.sh

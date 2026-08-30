@@ -114,6 +114,8 @@ def resolve_output_path(config: ABCIConfig, job_name: str) -> Path:
     resolved = Path(os.path.abspath(normalized_workdir / configured))
     if not resolved.is_relative_to(normalized_workdir):
         raise ConfigurationError("output_path resolves outside workdir")
+    if resolved == normalized_workdir:
+        raise ConfigurationError("output_path must not resolve to workdir")
     return resolved
 
 
@@ -300,6 +302,8 @@ def _validate_workdir(data: dict[str, object]) -> Path:
 
 def _validate_output_path_string(value: object) -> str:
     output_path = _validate_string(value, "output_path")
+    if not output_path:
+        raise ConfigurationError("output_path cannot be empty")
     if "\x00" in output_path:
         raise ConfigurationError("output_path cannot contain NUL")
     return output_path

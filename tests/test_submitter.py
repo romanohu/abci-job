@@ -58,7 +58,7 @@ def valid_config(**overrides: object) -> ABCIConfig:
     return ABCIConfig(**values)  # type: ignore[arg-type]
 
 
-def test_render_job_script_quotes_output_path_with_spaces(tmp_path: Path):
+def test_render_job_script_quotes_workdir_and_each_command_argument(tmp_path: Path):
     config = valid_config(workdir=Path("/groups/example group/project"))
 
     script = render_job_script(
@@ -77,7 +77,7 @@ def test_render_job_script_quotes_output_path_with_spaces(tmp_path: Path):
     assert "python -m package.train --output 'results/run one'" in script
 
 
-def test_render_job_script_quotes_workdir_and_each_command_argument(tmp_path: Path):
+def test_render_job_script_quotes_output_path_with_spaces(tmp_path: Path):
     config = valid_config(workdir=Path("/groups/example group/project"))
     script = render_job_script(config, "example-job", ["true"])
     assert "#PBS -o '/groups/example group/project/logs/example-job.log'" in script
@@ -503,6 +503,14 @@ def test_resolve_output_path_rejects_relative_parent_traversal():
         resolve_output_path(valid_config(output_path=Path("../job.log")), "example-job")
 
 
+@pytest.mark.parametrize("configured", [Path("."), Path("logs/..")])
+def test_resolve_output_path_rejects_relative_paths_that_resolve_to_workdir(
+    configured: Path,
+):
+    with pytest.raises(ConfigurationError, match="output_path"):
+        resolve_output_path(valid_config(output_path=configured), "example-job")
+
+
 @pytest.mark.parametrize("unsafe", ["bad\x00path", "bad\npath", "bad\rpath"])
 def test_resolve_output_path_rejects_control_characters(unsafe: str):
     with pytest.raises(ConfigurationError, match="output_path"):
@@ -540,6 +548,16 @@ def test_load_config_rejects_invalid_values(
     path = write_config(tmp_path, VALID_CONFIG_TOML.replace(keys[field], replacement))
 
     with pytest.raises(ConfigurationError, match=message):
+        load_config(path)
+
+
+def test_load_config_rejects_empty_output_path(tmp_path: Path):
+    path = write_config(
+        tmp_path,
+        VALID_CONFIG_TOML.replace('output_path = "logs/custom.log"', 'output_path = ""'),
+    )
+
+    with pytest.raises(ConfigurationError, match="output_path"):
         load_config(path)
 
 
