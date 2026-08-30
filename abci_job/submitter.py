@@ -174,8 +174,17 @@ def write_job_script(content: str, job_name: str, *, jobs_dir: str | Path) -> Pa
 def submit_job(
     job_path: str | Path,
     *,
+    output_path: str | Path,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> str:
+    output_directory = Path(output_path).parent
+    try:
+        output_directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise SubmissionError(
+            f"could not create output directory {output_directory}: {error}"
+        ) from error
+
     try:
         result = runner(
             ["qsub", str(job_path)], check=True, capture_output=True, text=True

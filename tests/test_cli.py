@@ -16,8 +16,12 @@ workdir = "/tmp"
 
 
 def write_config(tmp_path: Path) -> Path:
+    workdir = tmp_path / "workdir"
     config_path = tmp_path / "abci.toml"
-    config_path.write_text(CONFIG_TOML, encoding="utf-8")
+    config_path.write_text(
+        CONFIG_TOML.replace('workdir = "/tmp"', f'workdir = "{workdir}"'),
+        encoding="utf-8",
+    )
     return config_path
 
 
@@ -140,12 +144,35 @@ def test_main_dry_run_writes_executable_script_without_submitting(
     assert captured.err == ""
 
 
+def test_main_dry_run_does_not_create_output_directory_under_workdir(
+    tmp_path: Path,
+):
+    workdir = tmp_path / "workdir"
+
+    result = main(
+        [
+            "--config",
+            str(write_config(tmp_path)),
+            "--name",
+            "example-job",
+            "--dry-run",
+            "--",
+            "true",
+        ],
+        jobs_dir=tmp_path / "jobs",
+    )
+
+    assert result == 0
+    assert not workdir.exists()
+
+
 def test_main_submits_once_and_reports_generated_path_and_job_id(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ):
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert (tmp_path / "workdir" / "logs").is_dir()
         calls.append((args, kwargs))
         return subprocess.CompletedProcess(args[0], 0, stdout="12345.pbs1\n")
 

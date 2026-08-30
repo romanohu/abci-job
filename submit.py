@@ -10,6 +10,7 @@ from abci_job import (
     ABCIJobError,
     load_config,
     render_job_script,
+    resolve_output_path,
     submit_job,
     write_job_script,
 )
@@ -59,7 +60,8 @@ def main(
             print(script, end="" if script.endswith("\n") else "\n")
         if args.dry_run:
             return 0
-        job_id = submit_job(job_path, runner=submit_runner)
+        output_path = resolve_output_path(config, args.name)
+        job_id = submit_job(job_path, output_path=output_path, runner=submit_runner)
     except (ABCIJobError, OSError) as error:
         error_message = " ".join(str(error).splitlines())
         print(f"error: {error_message}", file=sys.stderr)

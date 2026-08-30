@@ -354,13 +354,14 @@ def test_write_job_script_rejects_invalid_name_without_creating_files(tmp_path: 
 
 def test_submit_job_uses_expected_scheduler_invocation(tmp_path: Path):
     job_path = tmp_path / "example.sh"
+    output_path = tmp_path / "logs" / "example.log"
     calls: list[tuple[object, ...]] = []
 
     def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append((args, kwargs))
         return subprocess.CompletedProcess(args[0], 0, stdout="12345.pbs1\n")
 
-    result = submit_job(job_path, runner=runner)
+    result = submit_job(job_path, output_path=output_path, runner=runner)
 
     assert result == "12345.pbs1"
     assert calls == [
@@ -376,12 +377,13 @@ def test_submit_job_rejects_empty_or_malformed_scheduler_output(
     tmp_path: Path, stdout: str
 ):
     job_path = tmp_path / "example.sh"
+    output_path = tmp_path / "logs" / "example.log"
 
     def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args[0], 0, stdout=stdout)
 
     with pytest.raises(SubmissionError, match="identifier"):
-        submit_job(job_path, runner=runner)
+        submit_job(job_path, output_path=output_path, runner=runner)
 
 
 @pytest.mark.parametrize(
@@ -395,15 +397,45 @@ def test_submit_job_wraps_scheduler_errors_and_keeps_script(
     tmp_path: Path, error: Exception, message: str
 ):
     job_path = tmp_path / "example.sh"
+    output_path = tmp_path / "logs" / "example.log"
     job_path.write_text("#!/bin/bash\n", encoding="utf-8")
 
     def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         raise error
 
     with pytest.raises(SubmissionError, match=message):
-        submit_job(job_path, runner=runner)
+        submit_job(job_path, output_path=output_path, runner=runner)
 
     assert job_path.exists()
+
+
+def test_submit_job_creates_output_parent_before_scheduler(tmp_path: Path):
+    output_path = tmp_path / "remote-workdir" / "logs" / "example.log"
+
+    def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert output_path.parent.is_dir()
+        return subprocess.CompletedProcess(args[0], 0, stdout="12345.pbs1\n")
+
+    result = submit_job(tmp_path / "example.sh", output_path=output_path, runner=runner)
+
+    assert result == "12345.pbs1"
+
+
+def test_submit_job_reports_output_parent_failure_without_invoking_scheduler(
+    tmp_path: Path,
+):
+    blocking_file = tmp_path / "not-a-directory"
+    blocking_file.write_text("file", encoding="utf-8")
+
+    def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("qsub must not run after directory creation fails")
+
+    with pytest.raises(SubmissionError, match="output directory"):
+        submit_job(
+            tmp_path / "example.sh",
+            output_path=blocking_file / "example.log",
+            runner=runner,
+        )
 
 
 def test_load_config_returns_typed_values(tmp_path: Path):
