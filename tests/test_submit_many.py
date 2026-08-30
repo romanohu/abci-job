@@ -63,6 +63,24 @@ def test_parse_args_accepts_multi_experiment_options():
     assert args.print_script is True
 
 
+def test_parse_args_rejects_single_command_workload_boundary():
+    with pytest.raises(SystemExit) as error:
+        parse_args(
+            [
+                "--config",
+                "config.toml",
+                "--experiments",
+                "runs.toml",
+                "--name",
+                "batch-a",
+                "--",
+                "true",
+            ]
+        )
+
+    assert error.value.code == 2
+
+
 def test_cli_help_exits_successfully():
     result = subprocess.run(
         [sys.executable, str(Path(__file__).parents[1] / "submit_many.py"), "--help"],

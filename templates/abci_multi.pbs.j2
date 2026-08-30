@@ -153,7 +153,7 @@ experiment_log="${experiment_log_dir}/{{ experiment.name }}.log"
 printf 'Starting %s on GPU %s; log=%s\n' '{{ experiment.name }}' '{{ experiment.gpu }}' "$experiment_log"
 (
   export CUDA_VISIBLE_DEVICES={{ experiment.gpu }}
-  exec {{ experiment.command }}
+  exec -- {{ experiment.command }}
 ) >"$experiment_log" 2>&1 &
 experiment_pids+=("$!")
 experiment_names+=('{{ experiment.name }}')

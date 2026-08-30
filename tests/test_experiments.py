@@ -277,6 +277,40 @@ def test_rendered_multi_job_runs_concurrently_and_writes_gpu_logs(tmp_path: Path
     assert "All 2 experiments succeeded" in result.stdout
 
 
+def test_rendered_multi_job_executes_dash_prefixed_executable_from_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    (tmp_path / "workdir").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    observed_gpu = tmp_path / "observed-gpu"
+    executable = bin_dir / "-gpu-probe"
+    executable.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s' \"$CUDA_VISIBLE_DEVICES\" > {shlex.quote(str(observed_gpu))}\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    manifest = ExperimentManifest(
+        (Experiment(name="dash-executable", command=("-gpu-probe",)),)
+    )
+
+    script = render_multi_job_script(valid_multi_config(tmp_path), manifest, "batch-a")
+    result = run_rendered_script(write_rendered_script(tmp_path, script))
+    experiment_log = (
+        tmp_path
+        / "workdir"
+        / "logs"
+        / "batch-a"
+        / "12345.pbs1"
+        / "dash-executable.log"
+    )
+
+    assert result.returncode == 0, experiment_log.read_text(encoding="utf-8")
+    assert observed_gpu.read_text(encoding="utf-8") == "0"
+
+
 def test_rendered_multi_job_waits_for_peers_then_reports_aggregate_failure(
     tmp_path: Path,
 ):
