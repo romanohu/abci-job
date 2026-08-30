@@ -17,7 +17,7 @@ _SCHEDULER_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _WALLTIME_PATTERN = re.compile(r"^\d{1,3}:[0-5]\d:[0-5]\d$")
 _JOB_ID_PATTERN = re.compile(r"^\d+(?:\.[A-Za-z0-9._-]+)?$")
 _REQUIRED_CONFIG_KEYS = {"group", "queue", "walltime", "workdir"}
-_OPTIONAL_CONFIG_KEYS = {"join_output", "setup_commands", "monitor"}
+_OPTIONAL_CONFIG_KEYS = {"output_path", "join_output", "setup_commands", "monitor"}
 _MONITOR_KEYS = {"enabled", "interval_seconds", "commands"}
 
 
@@ -46,6 +46,7 @@ class ABCIConfig:
     queue: str
     walltime: str
     workdir: Path
+    output_path: Path | None
     join_output: bool
     setup_commands: tuple[str, ...]
     monitor: MonitorConfig
@@ -64,6 +65,12 @@ def load_config(path: str | Path) -> ABCIConfig:
     queue = _validate_scheduler_value(data, "queue")
     walltime = _validate_walltime(data)
     workdir = _validate_workdir(data)
+    configured_output = data.get("output_path")
+    output_path = (
+        None
+        if configured_output is None
+        else Path(_validate_output_path_string(configured_output))
+    )
     join_output = _validate_bool(data.get("join_output", True), "join_output")
     setup_commands = _validate_commands(
         data.get("setup_commands", []), "setup_commands"
@@ -75,6 +82,7 @@ def load_config(path: str | Path) -> ABCIConfig:
         queue=queue,
         walltime=walltime,
         workdir=workdir,
+        output_path=output_path,
         join_output=join_output,
         setup_commands=setup_commands,
         monitor=monitor,
@@ -87,6 +95,28 @@ def validate_job_name(name: str) -> str:
     return name
 
 
+def resolve_output_path(config: ABCIConfig, job_name: str) -> Path:
+    if not isinstance(config, ABCIConfig):
+        raise ConfigurationError("config must be an ABCIConfig")
+
+    workdir = _validate_workdir({"workdir": str(config.workdir)})
+    validated_name = validate_job_name(job_name)
+    if config.output_path is None:
+        return workdir / "logs" / f"{validated_name}.log"
+    if not isinstance(config.output_path, Path):
+        raise ConfigurationError("output_path must be a Path or None")
+
+    configured = Path(_validate_output_path_string(str(config.output_path)))
+    if configured.is_absolute():
+        return configured
+
+    normalized_workdir = Path(os.path.abspath(workdir))
+    resolved = Path(os.path.abspath(normalized_workdir / configured))
+    if not resolved.is_relative_to(normalized_workdir):
+        raise ConfigurationError("output_path resolves outside workdir")
+    return resolved
+
+
 def render_job_script(
     config: ABCIConfig,
     job_name: str,
@@ -97,6 +127,7 @@ def render_job_script(
     group, queue, walltime, workdir, join_output, setup_commands, monitor = (
         _validate_render_config(config)
     )
+    output_path = resolve_output_path(config, job_name)
     template = _load_template(template_path)
 
     return template.render(
@@ -105,6 +136,7 @@ def render_job_script(
         walltime=walltime,
         job_name=validate_job_name(job_name),
         join_output=join_output,
+        output_path=shlex.quote(str(output_path)),
         workdir=shlex.quote(str(workdir)),
         setup_commands=setup_commands,
         monitor_enabled=monitor.enabled,
@@ -255,6 +287,13 @@ def _validate_workdir(data: dict[str, object]) -> Path:
     if not workdir.is_absolute():
         raise ConfigurationError("workdir must be absolute")
     return workdir
+
+
+def _validate_output_path_string(value: object) -> str:
+    output_path = _validate_string(value, "output_path")
+    if "\x00" in output_path:
+        raise ConfigurationError("output_path cannot contain NUL")
+    return output_path
 
 
 def _validate_monitor(value: object | None) -> MonitorConfig:

@@ -4,6 +4,7 @@
 #PBS -l walltime={{ walltime }}
 #PBS -P {{ group }}
 #PBS -N {{ job_name }}
+#PBS -o {{ output_path }}
 {% if join_output %}#PBS -j oe
 {% endif %}
 set -euo pipefail

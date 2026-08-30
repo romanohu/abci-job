@@ -15,6 +15,7 @@ from abci_job.submitter import (
     SubmissionError,
     load_config,
     render_job_script,
+    resolve_output_path,
     submit_job,
     validate_job_name,
     write_job_script,
@@ -25,6 +26,7 @@ group = "example-group"
 queue = "rt_HG"
 walltime = "12:00:00"
 workdir = "/groups/example-group/user/project"
+output_path = "logs/custom.log"
 join_output = true
 setup_commands = ["module purge", "source .venv/bin/activate"]
 
@@ -47,6 +49,7 @@ def valid_config(**overrides: object) -> ABCIConfig:
         "queue": "rt_HG",
         "walltime": "12:00:00",
         "workdir": Path("/groups/example-group/user/project"),
+        "output_path": None,
         "join_output": True,
         "setup_commands": (),
         "monitor": MonitorConfig(enabled=False, interval_seconds=0, commands=()),
@@ -55,7 +58,7 @@ def valid_config(**overrides: object) -> ABCIConfig:
     return ABCIConfig(**values)  # type: ignore[arg-type]
 
 
-def test_render_job_script_quotes_workdir_and_each_command_argument(tmp_path: Path):
+def test_render_job_script_quotes_output_path_with_spaces(tmp_path: Path):
     config = valid_config(workdir=Path("/groups/example group/project"))
 
     script = render_job_script(
@@ -72,6 +75,25 @@ def test_render_job_script_quotes_workdir_and_each_command_argument(tmp_path: Pa
     assert "#PBS -j oe" in script
     assert "cd '/groups/example group/project'" in script
     assert "python -m package.train --output 'results/run one'" in script
+
+
+def test_render_job_script_quotes_workdir_and_each_command_argument(tmp_path: Path):
+    config = valid_config(workdir=Path("/groups/example group/project"))
+    script = render_job_script(config, "example-job", ["true"])
+    assert "#PBS -o '/groups/example group/project/logs/example-job.log'" in script
+
+
+@pytest.mark.parametrize("join_output", [True, False])
+def test_render_job_script_emits_custom_output_independently_of_joining(
+    join_output: bool,
+):
+    script = render_job_script(
+        valid_config(output_path=Path("logs/custom.log"), join_output=join_output),
+        "example-job",
+        ["true"],
+    )
+    assert "#PBS -o /groups/example-group/user/project/logs/custom.log" in script
+    assert ("#PBS -j oe" in script) is join_output
 
 
 def test_render_job_script_omits_output_joining_when_disabled():
@@ -391,6 +413,7 @@ def test_load_config_returns_typed_values(tmp_path: Path):
     assert config.queue == "rt_HG"
     assert config.walltime == "12:00:00"
     assert config.workdir == Path("/groups/example-group/user/project")
+    assert config.output_path == Path("logs/custom.log")
     assert config.join_output is True
     assert config.setup_commands == ("module purge", "source .venv/bin/activate")
     assert config.monitor.enabled is True
@@ -416,6 +439,42 @@ workdir = "/groups/example-group/user/project"
     assert config.monitor.enabled is False
     assert config.monitor.interval_seconds == 0
     assert config.monitor.commands == ()
+    assert config.output_path is None
+
+
+def test_resolve_output_path_uses_job_name_default():
+    result = resolve_output_path(valid_config(), "example-job")
+    assert result == Path("/groups/example-group/user/project/logs/example-job.log")
+    assert result.is_absolute()
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (
+            Path("logs/custom.log"),
+            Path("/groups/example-group/user/project/logs/custom.log"),
+        ),
+        (Path("/shared/logs/custom.log"), Path("/shared/logs/custom.log")),
+    ],
+)
+def test_resolve_output_path_supports_relative_and_absolute_overrides(
+    configured: Path, expected: Path
+):
+    assert resolve_output_path(
+        valid_config(output_path=configured), "example-job"
+    ) == expected
+
+
+def test_resolve_output_path_rejects_relative_parent_traversal():
+    with pytest.raises(ConfigurationError, match="outside workdir"):
+        resolve_output_path(valid_config(output_path=Path("../job.log")), "example-job")
+
+
+@pytest.mark.parametrize("unsafe", ["bad\x00path", "bad\npath", "bad\rpath"])
+def test_resolve_output_path_rejects_control_characters(unsafe: str):
+    with pytest.raises(ConfigurationError, match="output_path"):
+        resolve_output_path(valid_config(output_path=Path(unsafe)), "example-job")
 
 
 @pytest.mark.parametrize("name", ["job", "train-01", "eval.v2", "a_b"])
