@@ -144,7 +144,7 @@ def render_job_script(
         monitor_enabled=monitor.enabled,
         monitor_interval=monitor.interval_seconds,
         monitor_commands=monitor.commands,
-        command=_quote_command(command),
+        command=quote_command(command),
     )
 
 
@@ -255,7 +255,7 @@ def _load_template(template_path: str | Path | None):
         raise ConfigurationError(f"template {path} was not found") from error
 
 
-def _quote_command(command: Sequence[str]) -> str:
+def quote_command(command: Sequence[str]) -> str:
     if isinstance(command, (str, bytes)) or not command:
         raise ConfigurationError("command must contain at least one argument")
     if any(not isinstance(argument, str) for argument in command):
