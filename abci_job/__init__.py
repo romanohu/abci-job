@@ -1,4 +1,9 @@
-from .experiments import Experiment, ExperimentManifest, load_experiment_manifest
+from .experiments import (
+    Experiment,
+    ExperimentManifest,
+    load_experiment_manifest,
+    render_multi_job_script,
+)
 from .submitter import (
     ABCIConfig,
     ABCIJobError,
@@ -24,6 +29,7 @@ __all__ = [
     "load_config",
     "load_experiment_manifest",
     "render_job_script",
+    "render_multi_job_script",
     "resolve_output_path",
     "submit_job",
     "validate_job_name",

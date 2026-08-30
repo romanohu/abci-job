@@ -1,0 +1,206 @@
+#!/bin/bash -l
+#PBS -q {{ queue }}
+#PBS -l select=1
+#PBS -l walltime={{ walltime }}
+#PBS -P {{ group }}
+#PBS -N {{ job_name }}
+#PBS -o {{ output_path }}
+{% if join_output %}#PBS -j oe
+{% endif %}
+set -euo pipefail
+
+cd {{ workdir }}
+{% for setup_command in setup_commands %}
+{{ setup_command }}
+{% endfor %}
+: "${PBS_JOBID:?PBS_JOBID is required}"
+experiment_log_dir={{ experiment_log_root }}/"$PBS_JOBID"
+mkdir -p -- "$experiment_log_dir"
+
+declare -a experiment_pids=()
+declare -a experiment_names=()
+declare -a experiment_gpus=()
+declare -a experiment_logs=()
+declare -a experiment_active=()
+monitor_pid=""
+pending_signal_status=""
+launching_process_groups=1
+cleanup_grace_seconds=1
+
+signal_experiment_groups() {
+  local signal_name="$1" index pid
+  for index in "${!experiment_pids[@]}"; do
+    if [[ "${experiment_active[$index]:-0}" == "1" ]]; then
+      pid=${experiment_pids[$index]}
+      kill -"$signal_name" -- "-$pid" 2>/dev/null || true
+    fi
+  done
+}
+
+signal_monitor_group() {
+  local signal_name="$1"
+  if [[ -n "$monitor_pid" ]]; then
+    kill -"$signal_name" -- "-$monitor_pid" 2>/dev/null || true
+  fi
+}
+
+signal_all_groups() {
+  local signal_name="$1"
+  signal_experiment_groups "$signal_name"
+  signal_monitor_group "$signal_name"
+}
+
+wait_for_group_leaders() {
+  local index pid
+  for index in "${!experiment_pids[@]}"; do
+    if [[ "${experiment_active[$index]:-0}" == "1" ]]; then
+      pid=${experiment_pids[$index]}
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  if [[ -n "$monitor_pid" ]]; then
+    wait "$monitor_pid" 2>/dev/null || true
+  fi
+}
+
+tracked_group_exists() {
+  local index pid
+  for index in "${!experiment_pids[@]}"; do
+    if [[ "${experiment_active[$index]:-0}" == "1" ]]; then
+      pid=${experiment_pids[$index]}
+      if kill -0 -- "-$pid" 2>/dev/null; then
+        return 0
+      fi
+    fi
+  done
+  if [[ -n "$monitor_pid" ]] && kill -0 -- "-$monitor_pid" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+clear_group_tracking() {
+  local index
+  for index in "${!experiment_pids[@]}"; do
+    experiment_active[$index]=0
+  done
+  monitor_pid=""
+}
+
+has_cleanup_targets() {
+  local index
+  for index in "${!experiment_pids[@]}"; do
+    if [[ "${experiment_active[$index]:-0}" == "1" ]]; then
+      return 0
+    fi
+  done
+  [[ -n "$monitor_pid" ]]
+}
+
+cleanup_active_groups() {
+  local cleanup_watchdog_pid
+  if ! has_cleanup_targets; then
+    return
+  fi
+
+  signal_all_groups TERM
+  set -m
+  (
+    sleep "$cleanup_grace_seconds"
+    signal_all_groups KILL
+  ) &
+  cleanup_watchdog_pid=$!
+
+  wait_for_group_leaders
+  if tracked_group_exists; then
+    wait "$cleanup_watchdog_pid" 2>/dev/null || true
+  else
+    kill -TERM -- "-$cleanup_watchdog_pid" 2>/dev/null || true
+    wait "$cleanup_watchdog_pid" 2>/dev/null || true
+  fi
+  clear_group_tracking
+}
+
+cleanup_all() {
+  local exit_status="$1"
+  trap - EXIT INT TERM
+  cleanup_active_groups
+  exit "$exit_status"
+}
+
+exit_on_signal() {
+  local exit_status="$1"
+  trap - EXIT INT TERM
+  cleanup_active_groups
+  exit "$exit_status"
+}
+
+handle_signal() {
+  local exit_status="$1"
+  if [[ "$launching_process_groups" == "1" ]]; then
+    if [[ -z "$pending_signal_status" ]]; then
+      pending_signal_status="$exit_status"
+    fi
+    return
+  fi
+  exit_on_signal "$exit_status"
+}
+
+trap 'cleanup_all "$?"' EXIT
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+
+set -m
+{% if monitor_enabled %}
+(
+  trap 'exit 0' INT TERM
+  while true; do
+{% for monitor_command in monitor_commands %}
+    {{ monitor_command }}
+{% endfor %}
+    sleep {{ monitor_interval }}
+  done
+) &
+monitor_pid=$!
+{% endif %}
+{% for experiment in experiments %}
+experiment_log="${experiment_log_dir}/{{ experiment.name }}.log"
+printf 'Starting %s on GPU %s; log=%s\n' '{{ experiment.name }}' '{{ experiment.gpu }}' "$experiment_log"
+(
+  export CUDA_VISIBLE_DEVICES={{ experiment.gpu }}
+  exec {{ experiment.command }}
+) >"$experiment_log" 2>&1 &
+experiment_pids+=("$!")
+experiment_names+=('{{ experiment.name }}')
+experiment_gpus+=('{{ experiment.gpu }}')
+experiment_logs+=("$experiment_log")
+experiment_active+=(1)
+{% endfor %}
+launching_process_groups=0
+if [[ -n "$pending_signal_status" ]]; then
+  exit_on_signal "$pending_signal_status"
+fi
+set +m
+
+failures=0
+for index in "${!experiment_pids[@]}"; do
+  pid=${experiment_pids[$index]}
+  if wait "$pid"; then
+    exit_status=0
+  else
+    exit_status=$?
+  fi
+  experiment_active[$index]=0
+  if [[ "$exit_status" -eq 0 ]]; then
+    printf 'Succeeded %s on GPU %s; log=%s\n' "${experiment_names[$index]}" "${experiment_gpus[$index]}" "${experiment_logs[$index]}"
+  else
+    failures=$((failures + 1))
+    printf 'Failed %s on GPU %s with exit status %s; log=%s\n' "${experiment_names[$index]}" "${experiment_gpus[$index]}" "$exit_status" "${experiment_logs[$index]}"
+  fi
+done
+
+if [[ "$failures" -ne 0 ]]; then
+  printf '%s of {{ experiments|length }} experiments failed\n' "$failures"
+  exit 1
+fi
+printf 'All {{ experiments|length }} experiments succeeded\n'

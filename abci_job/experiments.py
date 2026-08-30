@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import shlex
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .submitter import ConfigurationError, quote_command, validate_job_name
+from .submitter import (
+    ABCIConfig,
+    ConfigurationError,
+    _load_template,
+    _validate_render_config,
+    quote_command,
+    resolve_output_path,
+    validate_job_name,
+)
 
 _MAX_EXPERIMENTS = 8
 _TOP_LEVEL_KEYS = {"experiments"}
@@ -96,3 +105,54 @@ def _parse_experiment(value: object, index: int) -> Experiment:
         return Experiment(name=name, command=tuple(command))
     except ConfigurationError as error:
         raise ConfigurationError(f"{field}: {error}") from error
+
+
+def render_multi_job_script(
+    config: ABCIConfig,
+    manifest: ExperimentManifest,
+    job_name: str,
+    *,
+    template_path: str | Path | None = None,
+) -> str:
+    if not isinstance(manifest, ExperimentManifest):
+        raise ConfigurationError("manifest must be an ExperimentManifest")
+    group, queue, walltime, workdir, join_output, setup_commands, monitor = (
+        _validate_render_config(config)
+    )
+    if queue != "rt_HF":
+        raise ConfigurationError("multi-experiment jobs require queue rt_HF")
+
+    validated_name = validate_job_name(job_name)
+    output_path = resolve_output_path(config, validated_name)
+    path = (
+        Path(__file__).resolve().parents[1] / "templates" / "abci_multi.pbs.j2"
+        if template_path is None
+        else Path(template_path)
+    )
+    template = _load_template(path)
+    experiments = tuple(
+        {
+            "name": experiment.name,
+            "gpu": index,
+            "command": quote_command(experiment.command),
+        }
+        for index, experiment in enumerate(manifest.experiments)
+    )
+
+    return template.render(
+        group=group,
+        queue=queue,
+        walltime=walltime,
+        job_name=validated_name,
+        join_output=join_output,
+        output_path=shlex.quote(str(output_path)),
+        workdir=shlex.quote(str(workdir)),
+        experiment_log_root=shlex.quote(
+            str(workdir / "logs" / validated_name)
+        ),
+        setup_commands=setup_commands,
+        monitor_enabled=monitor.enabled,
+        monitor_interval=monitor.interval_seconds,
+        monitor_commands=monitor.commands,
+        experiments=experiments,
+    )
