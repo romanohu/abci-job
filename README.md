@@ -76,9 +76,9 @@ ABCI's `rt_HF` resource reserves one complete eight-GPU node. Set
 `queue = "rt_HF"` in the local ABCI configuration, then create a separate
 experiment manifest:
 
-The manifest contains one through eight entries in a top-level `experiments`
-array of tables. Each entry requires exactly `name` and `command`; no other
-fields are accepted.
+The manifest contains one through eight entries as top-level `[[experiments]]`
+array-of-table entries, with no other top-level keys. Each entry requires
+exactly `name` and `command`; no other fields are accepted.
 
 ```toml
 [[experiments]]
