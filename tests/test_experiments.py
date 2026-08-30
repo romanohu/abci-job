@@ -104,6 +104,15 @@ def registration_signal_setup(
     )
 
 
+def signal_after_leader_reaped_setup() -> tuple[str, ...]:
+    return (
+        (
+            "trap 'if [[ \"$BASH_COMMAND\" == *Succeeded* ]]; then "
+            "trap - DEBUG; kill -TERM \"$$\"; fi' DEBUG"
+        ),
+    )
+
+
 def _process_exists(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -376,9 +385,11 @@ def test_rendered_multi_job_cleans_experiment_group_and_monitor_on_signal(
         assert all(path.exists() for path in pid_files)
         tracked_pids = [int(path.read_text(encoding="utf-8")) for path in pid_files]
 
+        cleanup_started_at = time.monotonic()
         process.send_signal(signal_number)
 
         assert process.wait(timeout=5) == expected_status
+        assert time.monotonic() - cleanup_started_at < 0.8
         assert experiment_cleaned.exists()
         assert monitor_cleaned.exists()
         deadline = time.monotonic() + 5
@@ -570,6 +581,156 @@ def test_rendered_multi_job_bounds_stubborn_group_cleanup_and_stops_monitor(
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        for pid in tracked_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize(
+    ("initial_signal", "cleanup_signal", "expected_status"),
+    [
+        (signal.SIGINT, signal.SIGTERM, 130),
+        (signal.SIGTERM, signal.SIGINT, 143),
+    ],
+)
+def test_rendered_multi_job_ignores_later_signal_during_stubborn_cleanup(
+    tmp_path: Path,
+    initial_signal: signal.Signals,
+    cleanup_signal: signal.Signals,
+    expected_status: int,
+):
+    (tmp_path / "workdir").mkdir()
+    worker = tmp_path / "stubborn-worker.sh"
+    worker.write_text(
+        "#!/bin/bash\n"
+        'echo "$$" > "$1"\n'
+        "trap '' INT HUP\n"
+        "trap 'touch \"$3\"' TERM\n"
+        "(trap '' INT TERM HUP; while true; do sleep 60; done) &\n"
+        'echo "$!" > "$2"\n'
+        "while true; do wait || true; done\n",
+        encoding="utf-8",
+    )
+    experiment_pid = tmp_path / "experiment.pid"
+    experiment_child_pid = tmp_path / "experiment-child.pid"
+    cleanup_started = tmp_path / "cleanup-started"
+    manifest = ExperimentManifest(
+        (
+            Experiment(
+                "stubborn",
+                (
+                    "bash",
+                    str(worker),
+                    str(experiment_pid),
+                    str(experiment_child_pid),
+                    str(cleanup_started),
+                ),
+            ),
+        )
+    )
+    script_path = write_rendered_script(
+        tmp_path,
+        render_multi_job_script(
+            valid_multi_config(tmp_path), manifest, "repeated-signal-batch"
+        ),
+    )
+    process = subprocess.Popen(
+        ["bash", str(script_path)],
+        env={**os.environ, "PBS_JOBID": "12345.pbs1"},
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    tracked_pids: list[int] = []
+
+    try:
+        deadline = time.monotonic() + 5
+        pid_files = (experiment_pid, experiment_child_pid)
+        while time.monotonic() < deadline and not all(path.exists() for path in pid_files):
+            time.sleep(0.01)
+        assert all(path.exists() for path in pid_files)
+        tracked_pids = [int(path.read_text(encoding="utf-8")) for path in pid_files]
+
+        process.send_signal(initial_signal)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and not cleanup_started.exists():
+            time.sleep(0.01)
+        assert cleanup_started.exists()
+        process.send_signal(cleanup_signal)
+
+        assert process.wait(timeout=5) == expected_status
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and any(
+            _process_exists(pid) for pid in tracked_pids
+        ):
+            time.sleep(0.01)
+        assert all(not _process_exists(pid) for pid in tracked_pids)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for pid in tracked_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_rendered_multi_job_cleans_descendant_after_leader_was_reaped(
+    tmp_path: Path,
+):
+    (tmp_path / "workdir").mkdir()
+    worker = tmp_path / "orphaning-worker.sh"
+    worker.write_text(
+        "#!/bin/bash\n"
+        'echo "$$" > "$1"\n'
+        "(trap '' INT TERM HUP; while true; do sleep 60; done) &\n"
+        'echo "$!" > "$2"\n',
+        encoding="utf-8",
+    )
+    experiment_pid = tmp_path / "experiment.pid"
+    experiment_child_pid = tmp_path / "experiment-child.pid"
+    config = valid_multi_config(
+        tmp_path,
+        setup_commands=signal_after_leader_reaped_setup(),
+    )
+    manifest = ExperimentManifest(
+        (
+            Experiment(
+                "orphaning",
+                (
+                    "bash",
+                    str(worker),
+                    str(experiment_pid),
+                    str(experiment_child_pid),
+                ),
+            ),
+        )
+    )
+    tracked_pids: list[int] = []
+
+    try:
+        result = run_rendered_script(
+            write_rendered_script(
+                tmp_path,
+                render_multi_job_script(config, manifest, "orphaning-batch"),
+            )
+        )
+        tracked_pids = [
+            int(experiment_pid.read_text(encoding="utf-8")),
+            int(experiment_child_pid.read_text(encoding="utf-8")),
+        ]
+
+        assert result.returncode == 143
+        assert not _process_exists(tracked_pids[0])
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and _process_exists(tracked_pids[1]):
+            time.sleep(0.01)
+        assert not _process_exists(tracked_pids[1])
+    finally:
         for pid in tracked_pids:
             try:
                 os.kill(pid, signal.SIGKILL)

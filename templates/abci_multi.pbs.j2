@@ -22,6 +22,7 @@ declare -a experiment_names=()
 declare -a experiment_gpus=()
 declare -a experiment_logs=()
 declare -a experiment_active=()
+declare -a experiment_group_active=()
 monitor_pid=""
 pending_signal_status=""
 launching_process_groups=1
@@ -30,7 +31,7 @@ cleanup_grace_seconds=1
 signal_experiment_groups() {
   local signal_name="$1" index pid
   for index in "${!experiment_pids[@]}"; do
-    if [[ "${experiment_active[$index]:-0}" == "1" ]]; then
+    if [[ "${experiment_group_active[$index]:-0}" == "1" ]]; then
       pid=${experiment_pids[$index]}
       kill -"$signal_name" -- "-$pid" 2>/dev/null || true
     fi
@@ -63,26 +64,11 @@ wait_for_group_leaders() {
   fi
 }
 
-tracked_group_exists() {
-  local index pid
-  for index in "${!experiment_pids[@]}"; do
-    if [[ "${experiment_active[$index]:-0}" == "1" ]]; then
-      pid=${experiment_pids[$index]}
-      if kill -0 -- "-$pid" 2>/dev/null; then
-        return 0
-      fi
-    fi
-  done
-  if [[ -n "$monitor_pid" ]] && kill -0 -- "-$monitor_pid" 2>/dev/null; then
-    return 0
-  fi
-  return 1
-}
-
 clear_group_tracking() {
   local index
   for index in "${!experiment_pids[@]}"; do
     experiment_active[$index]=0
+    experiment_group_active[$index]=0
   done
   monitor_pid=""
 }
@@ -90,7 +76,7 @@ clear_group_tracking() {
 has_cleanup_targets() {
   local index
   for index in "${!experiment_pids[@]}"; do
-    if [[ "${experiment_active[$index]:-0}" == "1" ]]; then
+    if [[ "${experiment_group_active[$index]:-0}" == "1" ]]; then
       return 0
     fi
   done
@@ -112,25 +98,24 @@ cleanup_active_groups() {
   cleanup_watchdog_pid=$!
 
   wait_for_group_leaders
-  if tracked_group_exists; then
-    wait "$cleanup_watchdog_pid" 2>/dev/null || true
-  else
-    kill -TERM -- "-$cleanup_watchdog_pid" 2>/dev/null || true
-    wait "$cleanup_watchdog_pid" 2>/dev/null || true
-  fi
+  signal_all_groups KILL
+  kill -KILL -- "-$cleanup_watchdog_pid" 2>/dev/null || true
+  wait "$cleanup_watchdog_pid" 2>/dev/null || true
   clear_group_tracking
 }
 
 cleanup_all() {
   local exit_status="$1"
-  trap - EXIT INT TERM
+  trap - EXIT
+  trap '' INT TERM
   cleanup_active_groups
   exit "$exit_status"
 }
 
 exit_on_signal() {
   local exit_status="$1"
-  trap - EXIT INT TERM
+  trap - EXIT
+  trap '' INT TERM
   cleanup_active_groups
   exit "$exit_status"
 }
@@ -175,6 +160,7 @@ experiment_names+=('{{ experiment.name }}')
 experiment_gpus+=('{{ experiment.gpu }}')
 experiment_logs+=("$experiment_log")
 experiment_active+=(1)
+experiment_group_active+=(1)
 {% endfor %}
 launching_process_groups=0
 if [[ -n "$pending_signal_status" ]]; then
@@ -191,6 +177,9 @@ for index in "${!experiment_pids[@]}"; do
     exit_status=$?
   fi
   experiment_active[$index]=0
+  if ! kill -0 -- "-$pid" 2>/dev/null; then
+    experiment_group_active[$index]=0
+  fi
   if [[ "$exit_status" -eq 0 ]]; then
     printf 'Succeeded %s on GPU %s; log=%s\n' "${experiment_names[$index]}" "${experiment_gpus[$index]}" "${experiment_logs[$index]}"
   else
