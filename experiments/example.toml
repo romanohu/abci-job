@@ -1,0 +1,7 @@
+[[experiments]]
+name = "example-a"
+command = ["python", "-c", "print('experiment a')"]
+
+[[experiments]]
+name = "example-b"
+command = ["python", "-c", "print('experiment b')"]

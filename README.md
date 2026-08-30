@@ -1,8 +1,9 @@
 # ABCI Job Submitter
 
-`abci-job` generates a single-node PBS script for an arbitrary command and can
-submit that script from an ABCI login node. It does not transfer files, open an
-SSH connection, or require a particular source tree.
+`abci-job` generates a single-node PBS script for either one arbitrary command
+or one to eight independent single-GPU commands, and can submit that script
+from an ABCI login node. It does not transfer files, open an SSH connection, or
+require a particular source tree.
 
 The included example uses ABCI 3.0's `rt_HG` queue for a one-GPU job. Refer to
 the [ABCI 3.0 job execution documentation](https://docs.abci.ai/v3/en/job-execution/)
@@ -68,6 +69,36 @@ Use the scheduler directly to inspect or cancel work:
 qstat
 qdel <job-id>
 ```
+
+## Submit independent commands on eight GPUs
+
+ABCI's `rt_HF` resource reserves one complete eight-GPU node. Set
+`queue = "rt_HF"` in the local ABCI configuration, then create a separate
+experiment manifest:
+
+```toml
+[[experiments]]
+name = "example-a"
+command = ["python", "-c", "print('experiment a')"]
+```
+
+Submit or inspect it with:
+
+```bash
+python submit_many.py \
+  --config configs/abci_default.toml \
+  --experiments experiments/example.toml \
+  --name example-batch \
+  --dry-run \
+  --print-script
+```
+
+Remove `--dry-run` to call `qsub`. Manifest entries are assigned in order to
+`CUDA_VISIBLE_DEVICES=0` through `7`. Their combined stdout/stderr logs are
+written to `logs/<job-name>/<PBS_JOBID>/<experiment-name>.log` under
+`workdir`. All entries run to completion; after they finish, any failed entry
+makes the PBS job fail. The PBS-level output contains the launcher summary and
+optional monitor output.
 
 ## Configuration reference
 

@@ -31,3 +31,17 @@ python submit.py \
   -- \
   python -m package.train --dry-run --label "run one"
 ```
+
+## Full-node experiment manifest
+
+Use a separate manifest for one to eight independent single-GPU commands. The
+ABCI configuration used here must set `queue = "rt_HF"`.
+
+```bash
+python submit_many.py \
+  --config configs/abci_default.toml \
+  --experiments experiments/example.toml \
+  --name example-batch \
+  --dry-run \
+  --print-script
+```
