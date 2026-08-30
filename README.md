@@ -74,11 +74,19 @@ qdel <job-id>
 | `queue` | Yes | Queue name, such as `rt_HG`. |
 | `walltime` | Yes | Limit in `HHH:MM:SS` form. |
 | `workdir` | Yes | Absolute directory used by the generated script. |
+| `output_path` | No | Standard-output file; defaults to `logs/<job-name>.log` under `workdir`. |
 | `join_output` | No | Join standard output and standard error; defaults to `true`. |
 | `setup_commands` | No | Ordered trusted shell statements run before the command. |
 | `monitor.enabled` | No | Enable the monitoring loop; defaults to `false`. |
 | `monitor.interval_seconds` | No | Positive interval required when monitoring is enabled. |
 | `monitor.commands` | No | Trusted shell statements executed by the monitoring loop. |
+
+Relative `output_path` values are resolved under `workdir`; use an absolute path
+to write elsewhere. On a real submission, the helper creates the output file's
+parent directory before calling `qsub`. A dry run renders the absolute `#PBS -o`
+path but does not create that directory. With `join_output = true`, standard
+error is joined into the same file; otherwise PBS applies its default standard-
+error handling.
 
 The command after `--` is treated as an argument vector and each token is
 POSIX-quoted in the generated script. In contrast, `setup_commands` and

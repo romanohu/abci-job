@@ -2,6 +2,8 @@ group = "your-abci-group"
 queue = "rt_HG"
 walltime = "12:00:00"
 workdir = "/groups/your-abci-group/your-user/your-project"
+# Relative paths are resolved below workdir. Default: logs/<job-name>.log
+# output_path = "logs/custom.log"
 join_output = true
 
 setup_commands = [
