@@ -1,0 +1,22 @@
+# 資源や既定コマンドを変えるときに編集します。
+name = "example-job"
+queue = "rt_HG"
+walltime = "01:00:00"
+
+# 予約ノードを使う場合は queue を予約キュー名に変更し、rtype を指定します。
+# queue = "R1234"
+# rtype = "rt_HF"  # 単一実験なら rt_HG（GPU1基）や rt_HC（CPUのみ）も指定可能
+
+# 省略時は CLI の -- 以降でコマンドを指定します。
+# CLI に指定すると、このコマンド全体を置き換えます。
+command = ["python", "-c", "print('hello from ABCI')"]
+
+# 複数実験は上の command を削除し、queue = "rt_HF" に変更して設定します。
+# 各実験にGPUを1基ずつ割り当てます。CLI のコマンドとの併用はできません。
+# [[experiments]]
+# name = "seed-1"
+# command = ["python", "train.py", "seed=1"]
+#
+# [[experiments]]
+# name = "seed-2"
+# command = ["python", "train.py", "seed=2"]

@@ -1,0 +1,15 @@
+# 初回にコピーし、自分のABCI環境に合わせて編集します。
+group = "your-abci-group"
+workdir = "/groups/your-abci-group/your-user/your-project"
+
+# 実行順にそのままシェル文として実行します。
+setup_commands = [
+  "source /etc/profile.d/modules.sh",
+  # "module load cuda/<利用するバージョン>",
+  # "source .venv/bin/activate",
+]
+
+[monitor]
+enabled = false
+interval_seconds = 600
+commands = ["nvidia-smi"]
